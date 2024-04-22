@@ -1,0 +1,119 @@
+# ===========================================
+# = finding variants in miseq amplicon data =
+# ===========================================
+
+# According to https://web.genewiz.com/raw-data-faqs,
+# all MiSeq data have been trimmed for adaptor,
+# so no need to trim adaptors
+# ============================================================
+
+# 0. Go to directory and load modules
+# ============================================================
+
+conda activate crispresso2_env
+
+# 1. Demultiplex
+#    The first read always starts with the barcode.
+#    Use cutadapt to demultiplex, use barcode seq as name.
+#    There should be a way to run all samples at once (GROUP), 
+#    but this was not functional so I'm demonstrating individually as well (INDI).
+# ============================================================
+
+# first check barcode occurance - R1 & R2 are reading towards the middle of the sequence from opposite directions
+paste <(gunzip -c SHM010424_S1_L001_R1_001.fastq.gz | paste - - - - | awk -F "\t" '{print substr($2, 1, 6)}') <(gunzip -c SHM010424_S1_L001_R2_001.fastq.gz | paste - - - - | awk -F "\t" '{print substr($2, 1, 6)}') | sed 's/\t/-/' | sort | uniq -c | awk '{print $2"\t"$1}' | sort -k2,2nr > dual.barcode.6mer.count
+# the top 12 hexamer combinations are (example)
+# ATCACG-TTGGCC   67702
+# TTGGCC-ATCACG   63734
+# CGATGT-TTGGCC   41804
+# TTGGCC-CGATGT   40387
+# TTGGCC-TGACCA   27342
+# TGACCA-TTGGCC   25735
+# TTAGGC-TTGGCC   10980
+# TTGGCC-TTAGGC   10905
+# CAAGGT-CGGTGT   5805
+# TCTACA-GATCCC   4990
+# ATCACG-TGGCCC   1087
+# CGGAAG-CACTCA   1065
+
+# (GRUOP) prepare barcode fasta files
+echo -e ">bc1\nATCACG\n>bc2\nCGATGT\n>bc3\nTTAGGC" > forward.barcode.fasta
+#(dual barcode)echo -e ">kh6\nTTGGCC" > reverse.barcode.fasta
+
+# first run demultiplex with the first read matching the forward barcodes
+# the second read matching the reverse barcode
+# (BOTH)
+ml GNU/7.3.0-2.30  OpenMPI/3.1.1-CUDA
+ml cutadapt/2.1-Python-3.6.6
+
+# (GROUP)
+cutadapt -g ^file:./forward.barcode.fasta -G  -o miseq-{name1}.forward.read1.fastq.gz -p miseq-{name1}.forward.read2.fastq.gz ../30-787169823/00_fastqSHM010424_S1_L001_R1_001.fastq.gz SHM010424_S1_L001_R2_001.fastq.gz > miseq.cutadapt.demux.forward.run.log 2>&1
+# Only run below if you have reverse reads
+# cutadapt -g ^file:./forward.barcode.fasta -G ^file:./reverse.barcode.fasta -o miseq-{name1}-{name2}.forward.read1.fastq.gz -p miseq-{name1}-{name2}.forward.read2.fastq.gz ../30-973877763/00_fastq/KH110722_R1_001.fastq.gz ../30-787169823/00_fastq/KH110722_R2_001.fastq.gz > miseq.cutadapt.demux.forward.run.log 2>&1
+
+# additional run with the first read matching the reverse barcode
+# second read matching the first barcodes
+#cutadapt -g ^file:./reverse.barcode.fasta -G ^file:./forward.barcode.fasta -o miseq-{name1}-{name2}.reverse.read1.fastq.gz -p miseq-{name1}-{name2}.reverse.read2.fastq.gz miseq-unknown-unknown.forward.read1.fastq.gz miseq-unknown-unknown.forward.read2.fastq.gz > miseq.cutadapt.demux.reverse.run.log 2>&1
+
+# (INDI)
+# change barcode (listed above with echo) and name of files behind -o -p, barcode if desired
+
+cutadapt -g ^TTAGGC -o miseq-bc3.forward.read1.fastq.gz -p miseq-bc3.forward.read2.fastq.gz SHM010424_S1_L001_R1_001.fastq.gz SHM010424_S1_L001_R2_001.fastq.gz > miseq.cutadapt3.demux.forward.run.log
+
+
+# concatenate reads from both runs (only if forward/reverse read)
+#cat miseq-kh5-kh6.forward.read1.fastq.gz miseq-kh6-kh5.reverse.read1.fastq.gz > kh5.read1.fastq.gz && cat miseq-kh5-#kh6.forward.read2.fastq.gz miseq-kh6-kh5.reverse.read2.fastq.gz > kh5.read2.fastq.gz
+#cat miseq-kh7-kh6.forward.read1.fastq.gz miseq-kh6-kh7.reverse.read1.fastq.gz > kh7.read1.fastq.gz && cat miseq-kh7-#kh6.forward.read2.fastq.gz miseq-kh6-kh7.reverse.read2.fastq.gz > kh7.read2.fastq.gz
+#cat miseq-kh8-kh6.forward.read1.fastq.gz miseq-kh6-kh8.reverse.read1.fastq.gz > kh8.read1.fastq.gz && cat miseq-kh8-#kh6.forward.read2.fastq.gz miseq-kh6-kh8.reverse.read2.fastq.gz > kh8.read2.fastq.gz
+#cat miseq-kh9-kh6.forward.read1.fastq.gz miseq-kh6-kh9.reverse.read1.fastq.gz > kh9.read1.fastq.gz && cat miseq-kh9-#kh6.forward.read2.fastq.gz miseq-kh6-kh9.reverse.read2.fastq.gz > kh9.read2.fastq.gz
+
+conda deactivate
+
+# 2. map reads using bam mem and clip overlap
+# ============================================================
+
+module load GCC/8.3.0 BWA/0.7.17
+
+# build index
+bwa index -p ref ref.fasta
+
+# map 
+for sample in bc1 bc2 bc3
+do
+  bwa mem -M ref miseq-"$sample".forward.read1.fastq.gz miseq-"$sample".forward.read2.fastq.gz > $sample.sam 2> $sample.mem.log &
+done
+
+# convert bam
+module purge
+module load GCC/9.3.0 SAMtools/1.15
+
+for sample in bc1 bc2 bc3 
+do
+  samtools sort $sample.sam > $sample.bam 2> $sample.sort.log &
+done
+
+# clip overlap
+module load icc/2018.1.163-GCC-6.4.0-2.28 impi/2018.1.163 BamUtil/1.0.14
+
+for sample in bc1 bc2 bc3
+do
+  bam clipOverlap --storeOrig OT --overlapsOnly --in $sample.bam --out $sample.clip.bam 2> $sample.clip.log &
+done
+
+# 3. pileup reads
+# ============================================================
+
+module purge
+module load GCC/9.3.0 SAMtools/1.15
+
+# overall mutation profiles
+
+samtools mpileup -Q 20 -q 20 bc1.clip.bam bc2.clip.bam bc3.clip.bam | perl pileupCount.pl --minQ 20 --ref ref.fasta > all.sample.allele.count
+
+# 4. Create Visualization
+# ============================================================
+#this doesn't have to be hpcc, can be run on terminal
+
+Rscript figureTotalMutRate.R all.sample.allele.count bc1,bc2,bc3 figureTotalMutRate.pdf Arial
+
+
+
