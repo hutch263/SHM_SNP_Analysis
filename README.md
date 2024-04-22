@@ -15,7 +15,8 @@ This repository contains a workflow to analyze NGS data to look for the occurren
 - Modified from original file by Mackenzie Kapanka
 
 ### Save separate .csv files
-- I chose to save each sample into a separate .csv file for easier data analysis, examples of which are included 
+- I chose to save each sample into a separate .csv file for easier data analysis, examples of which are included (4.5.24 csv files, original is all.sample.2.count.xlsx)
+- some separating of columns was necessary using basic excel formulas
 
 ### 4_5_24_nb.ipymb
 - This jupyter notebook contains the mutation rate data analysis. I recommend downloading Visual Studio Code to work with notebooks
